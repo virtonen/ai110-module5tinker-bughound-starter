@@ -46,3 +46,21 @@ def test_missing_return_is_penalized():
     )
     assert risk["score"] < 100
     assert any("Return" in r or "return" in r for r in risk["reasons"])
+
+
+def test_new_raise_is_penalized_even_with_only_low_severity_issues():
+    original = "def f(x, y):\n    try:\n        return x / y\n    except:\n        return 0\n"
+    fixed = (
+        "def f(x, y):\n    if y is None:\n        raise TypeError('y')\n"
+        "    try:\n        return x / y\n    except ZeroDivisionError:\n        return 0\n"
+    )
+    risk = assess_risk(original, fixed, [{"type": "Code Quality", "severity": "Low", "msg": "m"}])
+    assert any("raise" in r for r in risk["reasons"])
+    assert risk["should_autofix"] is False
+
+
+def test_existing_raise_is_not_penalized():
+    code = "def f(x):\n    if x < 0:\n        raise ValueError('neg')\n    return x\n"
+    risk = assess_risk(code, code, [])
+    assert not any("raise" in r for r in risk["reasons"])
+    assert risk["should_autofix"] is True

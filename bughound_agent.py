@@ -86,7 +86,7 @@ class BugHoundAgent:
         issues = self._parse_json_array_of_issues(raw)
 
         if issues is None:
-            self._log("ANALYZE", "LLM output was not parseable JSON. Falling back to heuristics.")
+            self._log("ANALYZE", "LLM output failed validation. Falling back to heuristics.")
             return self._heuristic_analyze(code_snippet)
 
         return issues
@@ -174,31 +174,47 @@ class BugHoundAgent:
     # Parsing + utilities
     # ----------------------------
     def _parse_json_array_of_issues(self, text: str) -> Optional[List[Dict[str, str]]]:
+        """
+        Parse and STRICTLY validate the analyzer output.
+
+        Returns a list of issues, or None if the output should not be trusted
+        (the caller then falls back to heuristics). The reason is logged.
+        """
         text = text.strip()
         parsed = self._try_json_loads(text)
-        if isinstance(parsed, list):
-            return self._normalize_issues(parsed)
+        if not isinstance(parsed, list):
+            array_str = self._extract_first_json_array(text)
+            parsed = self._try_json_loads(array_str) if array_str else None
 
-        array_str = self._extract_first_json_array(text)
-        if array_str:
-            parsed2 = self._try_json_loads(array_str)
-            if isinstance(parsed2, list):
-                return self._normalize_issues(parsed2)
+        if not isinstance(parsed, list):
+            self._log("ANALYZE", "Rejected LLM output: no JSON array found.")
+            return None
 
-        return None
+        return self._normalize_issues(parsed)
 
-    def _normalize_issues(self, arr: List[Any]) -> List[Dict[str, str]]:
+    VALID_SEVERITIES = {"low": "Low", "medium": "Medium", "high": "High"}
+
+    def _normalize_issues(self, arr: List[Any]) -> Optional[List[Dict[str, str]]]:
+        """
+        All-or-nothing validation. An empty list is a legitimate "no issues" answer.
+        Any item that is not a dict with a non-empty "msg" and a severity of
+        Low/Medium/High rejects the whole array (returns None), because a
+        partially valid answer means the model is not following the contract.
+        """
         issues: List[Dict[str, str]] = []
-        for item in arr:
+        for idx, item in enumerate(arr):
             if not isinstance(item, dict):
-                continue
-            issues.append(
-                {
-                    "type": str(item.get("type", "Issue")),
-                    "severity": str(item.get("severity", "Unknown")),
-                    "msg": str(item.get("msg", "")).strip(),
-                }
-            )
+                self._log("ANALYZE", f"Rejected LLM output: item {idx} is not an object.")
+                return None
+            msg = item.get("msg")
+            if not isinstance(msg, str) or not msg.strip():
+                self._log("ANALYZE", f"Rejected LLM output: item {idx} has no non-empty 'msg'.")
+                return None
+            severity = self.VALID_SEVERITIES.get(str(item.get("severity", "")).strip().lower())
+            if severity is None:
+                self._log("ANALYZE", f"Rejected LLM output: item {idx} has invalid severity {item.get('severity')!r}.")
+                return None
+            issues.append({"type": str(item.get("type") or "Issue"), "severity": severity, "msg": msg.strip()})
         return issues
 
     def _try_json_loads(self, s: str) -> Any:

@@ -1,4 +1,10 @@
+import re
 from typing import Dict, List
+
+
+def _count_raises(code: str) -> int:
+    """Count lines that start with `raise` (regex, not a full parse)."""
+    return len(re.findall(r"^\s*raise\b", code, flags=re.MULTILINE))
 
 
 def assess_risk(
@@ -56,6 +62,12 @@ def assess_risk(
     if "return" in original_code and "return" not in fixed_code:
         score -= 30
         reasons.append("Return statements may have been removed.")
+
+    # A new `raise` means callers that used to get a value (or a swallowed error)
+    # may now get an exception. The issue list says nothing about this, so check the diff.
+    if _count_raises(fixed_code) > _count_raises(original_code):
+        score -= 20
+        reasons.append("Fix introduces new raise statement(s); behavior on errors may have changed.")
 
     if "except:" in original_code and "except:" not in fixed_code:
         # This is usually good, but still risky.
