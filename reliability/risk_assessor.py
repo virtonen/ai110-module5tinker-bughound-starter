@@ -1,3 +1,4 @@
+import ast
 import re
 from typing import Dict, List
 
@@ -5,6 +6,15 @@ from typing import Dict, List
 def _count_raises(code: str) -> int:
     """Count lines that start with `raise` (regex, not a full parse)."""
     return len(re.findall(r"^\s*raise\b", code, flags=re.MULTILINE))
+
+
+def _string_literals(code: str):
+    """Set of string constants in `code`, or None if it does not parse."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    return {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
 
 
 def assess_risk(
@@ -62,6 +72,13 @@ def assess_risk(
     if "return" in original_code and "return" not in fixed_code:
         score -= 30
         reasons.append("Return statements may have been removed.")
+
+    # Data safety: a string literal that vanished or changed means the fix edited runtime
+    # data (e.g. a blind find/replace inside a string). The issue list can't tell us that.
+    before, after = _string_literals(original_code), _string_literals(fixed_code)
+    if before is not None and after is not None and not before <= after:
+        score -= 30
+        reasons.append("String literal(s) changed or removed; fix may alter runtime data.")
 
     # A new `raise` means callers that used to get a value (or a swallowed error)
     # may now get an exception. The issue list says nothing about this, so check the diff.

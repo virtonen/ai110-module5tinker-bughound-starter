@@ -98,3 +98,14 @@ def test_invalid_severity_triggers_fallback():
 def test_one_bad_item_rejects_whole_array():
     _, logs = _analyze('[{"severity": "Low", "msg": "ok"}, {"severity": "Low"}]')
     assert any("Falling back to heuristics" in e["message"] for e in logs)
+
+
+def test_fix_that_rewrites_a_string_literal_is_not_autofixed():
+    # The heuristic analyzer matches "print(" inside a string; the heuristic fixer then
+    # rewrites the string's value. The risk layer must refuse to call that safe.
+    code = 'MSG = "call print(x) to debug"\n\ndef f():\n    return MSG\n'
+    result = BugHoundAgent(client=None).run(code)
+
+    assert result["fixed_code"] != code  # the bad edit is still proposed...
+    assert result["risk"]["should_autofix"] is False  # ...but never auto-applied
+    assert any("String literal" in r for r in result["risk"]["reasons"])
